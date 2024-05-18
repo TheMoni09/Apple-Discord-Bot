@@ -47,3 +47,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
         filename = data['url'] if stream else ytdl.prepare_filename(data)
         return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+    @staticmethod
+    async def get_title(url: str) -> str:
+        with youtube_dl.YoutubeDL(ytdl_format_options) as ydl:
+            info_dict = ydl.extract_info(url=url, download=False)
+            return info_dict.get('title', None)

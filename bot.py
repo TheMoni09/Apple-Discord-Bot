@@ -4,6 +4,8 @@ import os
 from dotenv import load_dotenv
 from helpers import config_helper
 import asyncio
+import sys
+import traceback
 
 load_dotenv()
 TOKEN: str = os.getenv('USER_TOKEN')
@@ -24,6 +26,12 @@ client: commands.Bot = commands.Bot(
                                     intents=discord.Intents.all(),
                                     help_command=MyHelpCommand()
                                    )
+
+
+@client.event
+async def on_command_error(ctx, error):
+    print('Ignoring exception in command {}:'.format(ctx.command), file=sys.stderr)
+    traceback.print_exception(type(error), error, error.__traceback__, file=sys.stderr)
 
 
 @client.event
