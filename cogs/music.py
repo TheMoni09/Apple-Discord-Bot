@@ -1,13 +1,17 @@
+import asyncio
+from functools import partial
+
 from discord.ext import commands
 from utils import YTDLSource
 from typing import NoReturn
 
 
 class Music(commands.Cog):
+
     def __init__(self, bot: commands.Bot) -> None:
         self.bot: commands.Bot = bot
-        self.queue: list[list] = list()
-        self.playing: str = str()
+        self.queue: list[tuple[str, str, int]] = []
+        self.playing: dict[int, str] = {guild.id: "" for guild in bot.guilds}
 
     @commands.command(name='join')
     async def join(self, ctx: commands.Context) -> None:
@@ -24,15 +28,17 @@ class Music(commands.Cog):
         ytdl = YTDLSource.YTDLSource
         if ctx.voice_client is not None and ctx.voice_client.is_playing():
             async with ctx.typing():
-                title: str = await ytdl.get_title(url)
-                await self.add_to_queue(url, title)
+                loop = asyncio.get_running_loop()
+                title_future = loop.run_in_executor(None, partial(ytdl.get_title, url))
+                title = await title_future
+                await self.add_to_queue(url, title, ctx.message.guild.id)
                 await ctx.send(f"**Added to Queue -** {title}")
                 return
 
         async with ctx.typing():
             player: YTDLSource = await ytdl.from_url(url, loop=self.bot.loop)
-            ctx.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
-            self.playing = player.title
+            ctx.voice_client.play(player, after=partial(self.play_next, ctx))
+            await self.set_playing(ctx.guild.id, player.title)
             await ctx.send(f'**Now playing:** {player.title}')
 
     @commands.command(name="pause")
@@ -55,15 +61,41 @@ class Music(commands.Cog):
         await ctx.send("**Stopping Playback**")
 
     @commands.command(name="skip")
-    async def skip(self, ctx: commands.Context) -> None:
-        if await self.is_queue_empty():
+    async def skip(self, ctx: commands.Context) -> NoReturn:
+        if await self.is_queue_empty(ctx.guild.id):
             await ctx.send("**ERROR:** The queue is empty!")
-            return
+            raise commands.CommandError("Queue is empty!")
 
-        next_song = await self.get_next_in_queue()
+        next_song = await self.get_next_in_queue(ctx.guild.id)
         ctx.voice_client.stop()
-        await ctx.send(f"**Skipping - ** {self.playing}")
+        await ctx.send(f"**Skipping - ** {await self.get_playing(ctx.guild.id)}")
         await self.play(ctx, url=next_song[0])
+
+    @commands.command(name="playing")
+    async def playing(self, ctx: commands.Context) -> None:
+        await ctx.send(f"**Playing:** {await self.get_playing(ctx.guild.id)}")
+
+    @commands.group(name="queue")
+    async def queue(self, ctx: commands.Context) -> None:
+        pass
+
+    @queue.command(name="list")
+    async def list_queue(self, ctx: commands.Context) -> None:
+        queue: list = await self.get_queue(ctx.guild.id)
+        async with ctx.typing():
+            i: int = 0
+            for song in queue:
+                print(f"Listing Song - URL: {song[0]} Title: {song[1]} Guild Id: {song[2]}")
+                await ctx.send(f"**Position:** {i+1} | **Song:** {song[0]}")
+                i += 1
+
+    @queue.command(name="remove")
+    async def remove_from_queue_command(self, ctx: commands.Context, url: str) -> NoReturn:
+        if not await self.is_in_queue(url, ctx.guild.id):
+            await ctx.send("**ERROR:** The song URL you specified is not in the queue!")
+            raise commands.CommandError("The specified song is not in the queue!")
+
+        await ctx.send(f"**Removed from queue:** {await self.remove_from_queue(url, ctx.guild.id)}")
 
     @play.before_invoke
     async def ensure_voice(self, ctx: commands.Context) -> NoReturn:
@@ -87,20 +119,61 @@ class Music(commands.Cog):
             await ctx.send("**ERROR:** I'm not playing anything!")
             raise commands.CommandError("Bot is not playing anything!")
 
-    async def add_to_queue(self, url: str, title: str) -> None:
-        self.queue.append(list({url, title}))
+    @list_queue.before_invoke
+    @remove_from_queue_command.before_invoke
+    async def assure_queue(self, ctx: commands.Context) -> NoReturn:
+        if ctx.guild.voice_client is None:
+            await ctx.send("**ERROR:** I'm not connected to a voice channel!")
+            raise commands.CommandError("Author is not connected to a voice channel!")
+        elif await self.is_queue_empty(ctx.guild.id):
+            await ctx.send("**ERROR:** The queue is empty!")
+            raise commands.CommandError("Queue is empty!")
 
-    async def remove_from_queue(self, index: int) -> None:
-        self.queue.pop(index)
+    def play_next(self, ctx: commands.Context, error=None) -> None:
+        if error:
+            print(f"Error occurred during playback: {error}")
 
-    async def get_next_in_queue(self) -> list:
-        return self.queue.pop(0)
+        if self.queue:
+            next_song: tuple[str, str, int] = asyncio.run_coroutine_threadsafe(self.get_next_in_queue(ctx.guild.id),
+                                                                               self.bot.loop).result()
+            print(f"Next Song - URL: {next_song[0]} Title: {next_song[1]} Guild Id: {next_song[2]}")
+            coro = self.play(ctx, url=next_song[0])
+            asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
+        else:
+            asyncio.run(self.set_playing(ctx.guild.id))
 
-    async def get_queue(self) -> list:
-        return self.queue
+    async def add_to_queue(self, url: str, title: str, guild: int) -> None:
+        self.queue.append((url, title, guild))
 
-    async def is_queue_empty(self) -> bool:
-        return not self.queue
+    async def remove_from_queue(self, url: str, guild: int) -> str:
+        for song in self.queue:
+            if song[2] == guild and song[0] == url:
+                self.queue.remove(song)
+                return song[1]
+
+    async def is_in_queue(self, url: str, guild: int) -> bool:
+        for song in self.queue:
+            if guild == song[2] and url == song[0]:
+                return True
+        return False
+
+    async def get_next_in_queue(self, guild: int) -> tuple[str, str, int]:
+        for song in self.queue:
+            if guild in song:
+                self.queue.remove(song)
+                return song
+
+    async def get_queue(self, guild: int) -> list:
+        return [song for song in self.queue if song[2] == guild]
+
+    async def is_queue_empty(self, guild: int) -> bool:
+        return not any(song[2] == guild for song in self.queue)
+
+    async def set_playing(self, guild: int, title: str = "") -> None:
+        self.playing[guild] = title
+
+    async def get_playing(self, guild: int) -> str:
+        return self.playing.get(guild, "")
 
 
 async def setup(bot: commands.Bot):
