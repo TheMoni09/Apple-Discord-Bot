@@ -2,7 +2,6 @@ import discord
 import asyncio
 import yt_dlp as youtube_dl
 
-# Suppress noise about console usage from errors
 youtube_dl.utils.bug_reports_message = lambda: ''
 
 
@@ -47,11 +46,3 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
         filename = data['url'] if stream else ytdl.prepare_filename(data)
         return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
-
-    @staticmethod
-    async def get_title(url: str) -> str:
-        with youtube_dl.YoutubeDL(ytdl_format_options) as ydl:
-            info_dict = ydl.extract_info(url=url, download=False)
-            return info_dict.get('title', None)
-
-

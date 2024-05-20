@@ -10,7 +10,7 @@ class Music(commands.Cog):
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot: commands.Bot = bot
-        self.queue: list[tuple[str, str, int]] = []
+        self.queue: list[tuple[str, int]] = []
         self.playing: dict[int, str] = {guild.id: "" for guild in bot.guilds}
 
     @commands.command(name='join')
@@ -28,11 +28,8 @@ class Music(commands.Cog):
         ytdl = YTDLSource.YTDLSource
         if ctx.voice_client is not None and ctx.voice_client.is_playing():
             async with ctx.typing():
-                loop = asyncio.get_running_loop()
-                title_future = loop.run_in_executor(None, partial(ytdl.get_title, url))
-                title = await title_future
-                await self.add_to_queue(url, title, ctx.message.guild.id)
-                await ctx.send(f"**Added to Queue -** {title}")
+                await self.add_to_queue(url, ctx.message.guild.id)
+                await ctx.send(f"**Added to Queue -** {url}")
                 return
 
         async with ctx.typing():
@@ -85,7 +82,7 @@ class Music(commands.Cog):
         async with ctx.typing():
             i: int = 0
             for song in queue:
-                print(f"Listing Song - URL: {song[0]} Title: {song[1]} Guild Id: {song[2]}")
+                print(f"Listing Song - URL: {song[0]} Guild Id: {song[1]}")
                 await ctx.send(f"**Position:** {i+1} | **Song:** {song[0]}")
                 i += 1
 
@@ -134,40 +131,40 @@ class Music(commands.Cog):
             print(f"Error occurred during playback: {error}")
 
         if self.queue:
-            next_song: tuple[str, str, int] = asyncio.run_coroutine_threadsafe(self.get_next_in_queue(ctx.guild.id),
-                                                                               self.bot.loop).result()
-            print(f"Next Song - URL: {next_song[0]} Title: {next_song[1]} Guild Id: {next_song[2]}")
+            next_song: tuple[str, int] = asyncio.run_coroutine_threadsafe(self.get_next_in_queue(ctx.guild.id),
+                                                                          self.bot.loop).result()
+            print(f"Next Song - URL: {next_song[0]} Guild Id: {next_song[1]}")
             coro = self.play(ctx, url=next_song[0])
             asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
         else:
             asyncio.run(self.set_playing(ctx.guild.id))
 
-    async def add_to_queue(self, url: str, title: str, guild: int) -> None:
-        self.queue.append((url, title, guild))
+    async def add_to_queue(self, url: str, guild: int) -> None:
+        self.queue.append((url, guild))
 
     async def remove_from_queue(self, url: str, guild: int) -> str:
         for song in self.queue:
-            if song[2] == guild and song[0] == url:
+            if song[1] == guild and song[0] == url:
                 self.queue.remove(song)
-                return song[1]
+                return song[0]
 
     async def is_in_queue(self, url: str, guild: int) -> bool:
         for song in self.queue:
-            if guild == song[2] and url == song[0]:
+            if guild == song[1] and url == song[0]:
                 return True
         return False
 
-    async def get_next_in_queue(self, guild: int) -> tuple[str, str, int]:
+    async def get_next_in_queue(self, guild: int) -> tuple[str, int]:
         for song in self.queue:
             if guild in song:
                 self.queue.remove(song)
                 return song
 
     async def get_queue(self, guild: int) -> list:
-        return [song for song in self.queue if song[2] == guild]
+        return [song for song in self.queue if song[1] == guild]
 
     async def is_queue_empty(self, guild: int) -> bool:
-        return not any(song[2] == guild for song in self.queue)
+        return not any(song[1] == guild for song in self.queue)
 
     async def set_playing(self, guild: int, title: str = "") -> None:
         self.playing[guild] = title
